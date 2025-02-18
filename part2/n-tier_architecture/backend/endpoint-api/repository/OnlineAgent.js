@@ -43,7 +43,12 @@ async function getOnlineAgentByAgentCode(agentcode) {
   }
 }
 
-async function createAgent(AgentCode, AgentName, IsLogin, AgentStatus) {
+async function postOnlineAgentStatus(
+  AgentCode,
+  AgentName,
+  IsLogin,
+  AgentStatus
+) {
   try {
     console.log("agentcode: ", AgentCode);
 
@@ -95,6 +100,6 @@ async function updateAgent(AgentCode, AgentName, IsLogin, AgentStatus) {
 
 module.exports.OnlineAgentRepo = {
   getOnlineAgentByAgentCode: getOnlineAgentByAgentCode,
-  createAgent,
+  postOnlineAgentStatus,
   updateAgent,
 };

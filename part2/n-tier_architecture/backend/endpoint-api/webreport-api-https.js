@@ -5,6 +5,7 @@ let fs = require("fs");
 let cors = require("cors");
 
 const OnlineAgent = require("./repository/OnlineAgent");
+const apiconfig = require("./apiconfig")["development"];
 
 //-------------------------------------
 
@@ -31,7 +32,62 @@ router.get("/status", function (req, res) {
 app.use("/", router);
 
 //----------------------------------------------
+//---------------- Websocket Part1 Start -----------------------
 
+var webSocketServer = new (require("ws").Server)({
+  port: process.env.PORT || 3071,
+});
+
+var clientWebSockets = {}; // userID: webSocket
+var CLIENTS = [];
+
+webSocketServer.on("connection", (ws, req) => {
+  var q = url.parse(req.url, true);
+
+  console.log(q.host);
+  console.log(q.pathname);
+  console.log(q.search);
+
+  var qdata = q.query; //returns an object:
+  console.log("------- webSocketServer ------");
+  console.log("AgentCode: " + qdata.agentcode);
+
+  ws.name = qdata.agentcode; //9999  , 9998
+  var newItem = ws.name;
+
+  if (CLIENTS.indexOf(newItem) === -1) {
+    //console.dir("ws: " + JSON.stringify(ws));
+
+    clientWebSockets[newItem] = ws;
+    CLIENTS.push(newItem);
+    ws.send("NEW USER JOINED");
+    console.log("New agent joined");
+  } else {
+    //ws.send("USER ALREADY JOINED");
+    console.log("This agent already joined");
+
+    //-----------------
+    const index = CLIENTS.indexOf(newItem);
+    if (index > -1) {
+      CLIENTS.splice(index, 1);
+    }
+
+    //console.log(CLIENTS);
+
+    delete clientWebSockets[ws.name];
+    console.log("Previous Agent deleted: " + ws.name);
+    //---------------------
+    clientWebSockets[ws.name] = ws;
+
+    CLIENTS.push(newItem);
+    ws.send("NEW USER JOINED");
+
+    console.log("New agent joined");
+    //--------------------
+  }
+});
+
+//---------------- Websocket Part1 End --------------------
 const init = async () => {
   //process.setMaxListeners(0);
   require("events").defaultMaxListeners = 0;
@@ -81,9 +137,7 @@ const init = async () => {
     validate: async (request, token, h) => {
       // here is where you validate your token
       // comparing with token from your database for example
-      const isValid =
-        token ===
-        "1aaZ!ARgAQGuQzp00D5D000000.mOv2jmhXkfIsjgywpCIh7.HZpc6vED1LCbc90DTaVDJwdNqbTW5r4uZicv8AFfkOE1ialqnR8UN5.wnAgh090h";
+      const isValid = token === apiconfig.serverKey;
 
       const credentials = { token };
       const artifacts = { test: "info" };
@@ -128,8 +182,7 @@ const init = async () => {
     },
   });
 
-  //-------- Code continue here -------------------
-
+  //-------- Your Code continue here -------------------
   server.route({
     method: "GET",
     path: "/api/v1/getOnlineAgentByAgentCode",
@@ -157,7 +210,13 @@ const init = async () => {
       try {
         param.agentcode;
         if (param.agentcode == null)
-          return h.response("Please provide agentcode.").code(400);
+          return h
+            .response({
+              error: true,
+              statusCode: 400,
+              errMessage: "Please provide agentcode.",
+            })
+            .code(400);
         else {
           const responsedata =
             await OnlineAgent.OnlineAgentRepo.getOnlineAgentByAgentCode(
@@ -166,7 +225,11 @@ const init = async () => {
 
           if (responsedata.statusCode == 500)
             return h
-              .response("Something went wrong. Please try again later.")
+              .response({
+                error: true,
+                statusCode: 500,
+                errMessage: "An internal server error occurred.",
+              })
               .code(500);
           else if (responsedata.statusCode == 200) return responsedata;
           else if (responsedata.statusCode == 404)
@@ -182,7 +245,6 @@ const init = async () => {
     },
   });
 
-  //----------------------------------------------
   server.route({
     method: "POST",
     path: "/api/v1/postOnlineAgentStatus",
@@ -203,45 +265,51 @@ const init = async () => {
         ],
         credentials: true,
       },
+      payload: {
+        parse: true,
+        allow: ["application/json", "multipart/form-data"],
+        multipart: true, // <== this is important in hapi 19
+      },
     },
     handler: async (request, h) => {
       const { AgentCode, AgentName, IsLogin, AgentStatus } = request.payload;
+      var d = new Date();
+
       try {
         if (!AgentCode)
-          return h.response({ error: "Please provide agentcode." }).code(400);
+          return h
+            .response({
+              error: true,
+              statusCode: 400,
+              errMessage: "Please provide agentcode.",
+            })
+            .code(400);
         else {
           const responsedata =
-            await OnlineAgent.OnlineAgentRepo.getOnlineAgentByAgentCode(
-              `${AgentCode}`
+            await OnlineAgent.OnlineAgentRepo.postOnlineAgentStatus(
+              AgentCode,
+              AgentName,
+              IsLogin,
+              AgentStatus
             );
 
           if (responsedata.statusCode == 500)
             return h
               .response({
-                error: "Something went wrong. Please try again later.",
+                error: true,
+                statusCode: 500,
+                errMessage: "An internal server error occurred.",
               })
               .code(500);
-
-          if (responsedata.statusCode == 404) {
-            return OnlineAgent.OnlineAgentRepo.createAgent(
-              AgentCode,
-              AgentName,
-              IsLogin,
-              AgentStatus
-            );
-          } else if (responsedata.statusCode == 200) {
-            return OnlineAgent.OnlineAgentRepo.updateAgent(
-              AgentCode,
-              AgentName,
-              IsLogin,
-              AgentStatus
-            );
-          } else if (responsedata.statusCode == 404)
+          else if (responsedata.statusCode == 200) return responsedata;
+          else if (responsedata.statusCode == 404)
             return h.response(responsedata).code(404);
           else
             return h
               .response({
-                error: "Something went wrong. Please try again later.",
+                error: true,
+                statusCode: 500,
+                errMessage: "An internal server error occurred.",
               })
               .code(500);
         }
@@ -250,7 +318,75 @@ const init = async () => {
       }
     },
   });
-  //----------------------------------------------
+
+  server.route({
+    method: "POST",
+    path: "/api/v1/postSendMessage",
+    config: {
+      cors: {
+        origin: ["*"],
+        headers: [
+          "Access-Control-Allow-Headers",
+          "Access-Control-Allow-Origin",
+          "Accept",
+          "Authorization",
+          "Content-Type",
+          "If-None-Match",
+          "Accept-language",
+        ],
+        additionalHeaders: [
+          "Access-Control-Allow-Headers: Origin, Content-Type, x-ms-request-id , Authorization",
+        ],
+        credentials: true,
+      },
+      payload: {
+        parse: true,
+        allow: ["application/json", "multipart/form-data"],
+        multipart: true, // <== this is important in hapi 19
+      },
+    },
+    handler: async (request, h) => {
+      let param = request.payload;
+
+      const FromAgentCode = param.FromAgentCode;
+      const ToAgentCode = param.ToAgentCode;
+      const Message = param.Message;
+      var d = new Date();
+
+      try {
+        if (param.FromAgentCode == null || param.ToAgentCode == null)
+          return h.response("Please provide AgentCode.").code(400);
+        else {
+          //---------------- Websocket Part3 Start -----------------------
+
+          if (clientWebSockets[ToAgentCode]) {
+            clientWebSockets[ToAgentCode].send(
+              JSON.stringify({
+                MessageType: "2",
+                FromAgentCode: FromAgentCode,
+                ToAgentCode: ToAgentCode,
+                DateTime: d.toLocaleString("en-US"),
+                Message: Message,
+              })
+            );
+
+            return {
+              error: false,
+              message: "Message has been set.",
+            };
+          } else
+            return h
+              .response("Agent not found, can not send message to agent.")
+              .code(404);
+
+          //---------------- Websocket Part3 End -----------------------
+        }
+      } catch (err) {
+        console.dir(err);
+      }
+    },
+  });
+
   await server.start();
   console.log("Webreport API Server running on %s", server.info.uri);
 };
