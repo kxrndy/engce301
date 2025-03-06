@@ -1,6 +1,7 @@
 const hapi = require("@hapi/hapi");
 let express = require("express");
 const AuthBearer = require("hapi-auth-bearer-token");
+const { unauthorized, badImplementation } = require("@hapi/boom");
 let fs = require("fs");
 let cors = require("cors");
 
@@ -32,6 +33,7 @@ router.get("/status", function (req, res) {
 app.use("/", router);
 
 //----------------------------------------------
+
 //---------------- Websocket Part1 Start -----------------------
 
 var webSocketServer = new (require("ws").Server)({
@@ -87,7 +89,8 @@ webSocketServer.on("connection", (ws, req) => {
   }
 });
 
-//---------------- Websocket Part1 End --------------------
+//---------------- Websocket Part1 End -----------------------
+
 const init = async () => {
   //process.setMaxListeners(0);
   require("events").defaultMaxListeners = 0;
@@ -132,8 +135,26 @@ const init = async () => {
 
   await server.register(AuthBearer);
 
+  server.ext("onPreResponse", (request, h) => {
+    const response = request.response;
+
+    // Check if the response is an error
+    if (response.isBoom) {
+      console.error(response);
+      const { output } = response;
+      return h
+        .response({
+          error: output.payload.message,
+        })
+        .code(output.statusCode);
+    }
+
+    return h.continue;
+  });
+
   server.auth.strategy("simple", "bearer-access-token", {
     allowQueryToken: true, // optional, false by default
+    unauthorized: () => unauthorized("Invalid Auth key."),
     validate: async (request, token, h) => {
       // here is where you validate your token
       // comparing with token from your database for example
@@ -209,7 +230,7 @@ const init = async () => {
 
       try {
         param.agentcode;
-        if (param.agentcode == null)
+        if (!param.agentcode)
           return h
             .response({
               error: true,
@@ -236,7 +257,11 @@ const init = async () => {
             return h.response(responsedata).code(404);
           else
             return h
-              .response("Something went wrong. Please try again later.")
+              .response({
+                error: true,
+                statusCode: 500,
+                errMessage: "An internal server error occurred.",
+              })
               .code(500);
         }
       } catch (err) {
@@ -292,6 +317,31 @@ const init = async () => {
               IsLogin,
               AgentStatus
             );
+
+          //---------------- Websocket Part2 Start -----------------------
+          console.log("AgentCode: " + AgentCode);
+
+          if (!responsedata.error) {
+            if (clientWebSockets[AgentCode]) {
+              console.log("Sennding MessageType");
+              clientWebSockets[AgentCode].send(
+                JSON.stringify({
+                  MessageType: "1",
+                  AgentCode: AgentCode,
+                  AgentName: AgentName,
+                  IsLogin: IsLogin,
+                  AgentStatus: AgentStatus,
+                  DateTime: d.toLocaleString("en-US"),
+                })
+              );
+
+              return {
+                error: false,
+                message: "Agent status has been set.",
+              };
+            }
+          }
+          //---------------- Websocket Part2 End -----------------------
 
           if (responsedata.statusCode == 500)
             return h
@@ -355,7 +405,13 @@ const init = async () => {
 
       try {
         if (param.FromAgentCode == null || param.ToAgentCode == null)
-          return h.response("Please provide AgentCode.").code(400);
+          return h
+            .response({
+              error: true,
+              statusCode: 400,
+              errMessage: "Please provide agentcode.",
+            })
+            .code(400);
         else {
           //---------------- Websocket Part3 Start -----------------------
 
@@ -376,7 +432,11 @@ const init = async () => {
             };
           } else
             return h
-              .response("Agent not found, can not send message to agent.")
+              .response({
+                error: true,
+                statusCode: 404,
+                errMessage: "Agent not found, can not send message to agent.",
+              })
               .code(404);
 
           //---------------- Websocket Part3 End -----------------------
@@ -386,6 +446,7 @@ const init = async () => {
       }
     },
   });
+  //----------------------------------------------
 
   await server.start();
   console.log("Webreport API Server running on %s", server.info.uri);
